@@ -1,0 +1,4 @@
+discord.py
+youtube-dl
+python-dotenv
+supabase
