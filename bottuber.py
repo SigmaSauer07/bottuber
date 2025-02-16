@@ -40,6 +40,7 @@ ydl_opts = {
 
 def get_server_config(guild_id):
     try:
+        guild_id_decimal = Decimal(guild_id)  # Use Decimal
         data, count = supabase.table('server_configs').select("*").eq("guild_id", guild_id).execute()
 
         if data:
@@ -58,53 +59,38 @@ def get_server_config(guild_id):
 
 def set_server_config(guild_id, youtube_channel_id, discord_channel_id):
     try:
-        guild_id_int = int(guild_id)  # Convert to integer
-        if guild_id_int > sys.maxsize:  # Check if the number is too big.
-            print("guild_id is too big to be converted to integer")
-            return None
-        data, count = supabase.table('server_configs').upsert({"guild_id": guild_id_int, "youtube_channel_id": youtube_channel_id, "discord_channel_id": discord_channel_id}).execute()
-        return data
-    except ValueError: # Handle potential type conversion errors.
-        print("guild_id could not be converted to integer.")
-        return None
+        guild_id_decimal = Decimal(guild_id)  # Use Decimal
+        data, count = supabase.table('server_configs').upsert({
+            "guild_id": guild_id_decimal,
+            "youtube_channel_id": youtube_channel_id,
+            "discord_channel_id": discord_channel_id
+        }).execute()
+        return data  # Return the data, not just the count
     except Exception as e:
-        print(f"Error setting config in Supabase: {e}")
+        logger.error(f"Error setting config in Supabase: {e}")
         return None
 
 def update_last_video_id(guild_id, last_video_id):
     try:
-        guild_id_int = int(guild_id)  # Convert to integer
-        if guild_id_int > sys.maxsize:  # Check if the number is too big.
-            print("guild_id is too big to be converted to integer")
-            return None
-        data, count = supabase.table('server_configs').update({"last_video_id": last_video_id}).eq("guild_id", guild_id_int).execute()
+        guild_id_decimal = Decimal(guild_id)  # Use Decimal
+        data, count = supabase.table('server_configs').update({"last_video_id": last_video_id}).eq("guild_id", guild_id_decimal).execute()
         return data
-    except ValueError: # Handle potential type conversion errors.
-        print("guild_id could not be converted to integer.")
-        return None
     except Exception as e:
-        print(f"Error updating last_video_id in Supabase: {e}")
+        logger.error(f"Error updating last_video_id in Supabase: {e}")
         return None
 
 def remove_server_config(guild_id):
-    print(f"remove_server_config called for guild_id: {guild_id} (type: {type(guild_id)})")
     try:
-        guild_id_int = int(guild_id)  # Convert to integer
-        if guild_id_int > sys.maxsize:  # Check if the number is too big.
-            print("guild_id is too big to be converted to integer")
-            return None
-        data, count = supabase.table('server_configs').delete().eq("guild_id", guild_id_int).execute()
-        print(f"Supabase delete returned data: {data}")
+        guild_id_decimal = Decimal(guild_id)  # Use Decimal
+        data, count = supabase.table('server_configs').delete().eq("guild_id", guild_id_decimal).execute()
         return data
-    except ValueError: # Handle potential type conversion errors.
-        print("guild_id could not be converted to integer.")
-        return None
     except Exception as e:
-        print(f"Error removing config from Supabase: {e}")
+        logger.error(f"Error removing config from Supabase: {e}")
         return None
     
-    def get_server_schedule(guild_id):
+def get_server_schedule(guild_id):
     try:
+        guild_id_decimal = Decimal(guild_id)  # Use Decimal
         data, count = supabase.table('server_schedules').select("*").eq("guild_id", guild_id).execute()
         return data[0] if data and isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) else None
     except Exception as e:
@@ -113,7 +99,7 @@ def remove_server_config(guild_id):
 
 def set_server_schedule(guild_id, check_time_str, timezone_str):
     try:
-        guild_id_int = int(guild_id)
+        guild_id_decimal = Decimal(guild_id)  # Use Decimal
         data, count = supabase.table('server_schedules').upsert({"guild_id": guild_id_int, "check_time": check_time_str, "timezone": timezone_str}).execute()
         return data
     except (ValueError, TypeError):
@@ -125,7 +111,7 @@ def set_server_schedule(guild_id, check_time_str, timezone_str):
 
 def remove_server_schedule(guild_id):
     try:
-        guild_id_int = int(guild_id)
+        guild_id_decimal = Decimal(guild_id)  # Use Decimal
         data, count = supabase.table('server_schedules').delete().eq("guild_id", guild_id_int).execute()
         return data
     except (ValueError, TypeError):
@@ -137,6 +123,7 @@ def remove_server_schedule(guild_id):
 
 async def get_last_check_time(guild_id):
     try:
+        guild_id_decimal = Decimal(guild_id)  # Use Decimal
         data, count = supabase.table('server_schedules').select("last_check").eq("guild_id", guild_id).execute()
         if data and isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) and data[0].get('last_check'):
             return datetime.fromisoformat(data[0]['last_check'])
@@ -148,7 +135,7 @@ async def get_last_check_time(guild_id):
 
 async def set_last_check_time(guild_id, last_check_time):
     try:
-        guild_id_int = int(guild_id)
+        guild_id_decimal = Decimal(guild_id)  # Use Decimal
         data, count = supabase.table('server_schedules').update({"last_check": last_check_time.isoformat()}).eq("guild_id", guild_id_int).execute()
         return data
     except (ValueError, TypeError):
@@ -205,7 +192,7 @@ async def scheduled_check():
     while True:
         now = datetime.utcnow()
         for guild in client.guilds:
-            schedule = get_server_schedule(guild.id)
+            schedule = get_server_schedule(str(guild.id))
             if schedule:
                 try:
                     check_time_str = schedule.get("check_time")
@@ -254,7 +241,7 @@ async def on_message(message):
         elif command == "!tb setchannel":
             try:
                 channel_id = message.content.split()[1]
-                server_id = message.guild.id
+                server_id = str(message.guild.id)
                 set_server_config(server_id, channel_id, None)
                 await message.channel.send("YouTube channel set!")
             except IndexError:
@@ -265,7 +252,7 @@ async def on_message(message):
         elif command == "!tb setdiscordchannel":
             try:
                 discord_channel_id = message.content.split()[1]
-                server_id = message.guild.id
+                server_id = str(message.guild.id)
                 set_server_config(server_id, None, discord_channel_id)
                 await message.channel.send("Discord channel set!")
             except IndexError:
@@ -291,7 +278,7 @@ async def on_message(message):
                         raise ValueError("Invalid time format. Use HH:MMam/pm or HH:MM (24-hour format)")
 
                 pytz.timezone(timezone_str)
-                server_id = message.guild.id
+                server_id = str(message.guild.id)
 
                 try:
                     server_id_int = int(server_id)
@@ -299,7 +286,7 @@ async def on_message(message):
                     await message.channel.send("Invalid server ID. Please try again.")
                     return  # Stop execution if conversion fails
 
-                result = set_server_schedule(server_id_int, check_time.strftime("%H:%M"), timezone_str)
+                result = set_server_schedule(server_id, check_time.strftime("%H:%M"), timezone_str)
                 if result:
                     await message.channel.send(f"Schedule set to {time_str} in {timezone_str}!")
                 else:
@@ -314,7 +301,7 @@ async def on_message(message):
                 await message.channel.send(f"An unexpected error occurred: {e}")
 
         elif command == "!tb removeschedule":
-            server_id = message.guild.id
+            server_id = str(message.guild.id)
             removed = remove_server_schedule(server_id)
             if removed:
                 await message.channel.send("Schedule removed for this server.")
@@ -322,7 +309,7 @@ async def on_message(message):
                 await message.channel.send("No schedule found for this server.")
 
         elif command == "!tb listschedule":
-            schedule = get_server_schedule(message.guild.id)
+            schedule = get_server_schedule(str(message.guild.id))
             if schedule:
                 check_time = schedule.get("check_time")
                 timezone = schedule.get("timezone")
@@ -331,15 +318,15 @@ async def on_message(message):
                 await message.channel.send("No schedule set for this server.")
 
         elif command == "!tb test":
-            config = get_server_config(message.guild.id)
+            config = get_server_config(str(message.guild.id))
             if config and config.get("youtube_channel_id") and config.get("discord_channel_id"):
                 await message.channel.send("Testing connection... (This may take a moment)")
-                await check_for_new_videos(message.guild.id)
+                await check_for_new_videos(str(message.guild.id))
             else:
                 await message.channel.send("Please set both YouTube and Discord channels first.")
 
         elif command == "!tb info":
-            config = get_server_config(message.guild.id)
+            config = get_server_config(str(message.guild.id))
             if config and config.get("youtube_channel_id"):
                 try:
                     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
@@ -361,7 +348,7 @@ async def on_message(message):
                 await message.channel.send("Please set the YouTube channel first.")
 
         elif command == "!tb remove":
-            server_id = message.guild.id
+            server_id = str(message.guild.id)
             try:
                 removed_config = remove_server_config(server_id)
                 removed_schedule = remove_server_schedule(server_id)
