@@ -1,5 +1,5 @@
 discord.py
-youtube-dl
 python-dotenv
 supabase
 pytz
+google-api-python-client

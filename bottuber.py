@@ -1,5 +1,4 @@
 import discord
-import yt_dlp as youtube_dl
 import asyncio
 from datetime import datetime, timezone
 import os
@@ -7,6 +6,8 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 import logging
 import pytz
+from decimal import Decimal
+from googleapiclient.discovery import build
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,17 +27,17 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     print("Error: SUPABASE_URL or SUPABASE_KEY environment variables not set.")
     exit(1)
 
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
+if YOUTUBE_API_KEY is None:
+    print("Error: YOUTUBE_API_KEY environment variable not set.")
+    exit(1)
+
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
-
-ydl_opts = {
-    'format': 'bestaudio/bestvideo',
-    'noplaylist': True,
-}
-
 
 def get_server_config(guild_id):
     try:
@@ -172,6 +173,61 @@ async def set_last_check_time(guild_id, last_check_time):
         logger.error(f"Error setting last check time in Supabase: {e}")
         return None
 
+def get_channel_info(youtube_channel_id):
+    try:
+        youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+
+        request = youtube.channels().list(
+            part='snippet,statistics',
+            id=youtube_channel_id
+        )
+        response = request.execute()
+
+        if response['items']:
+            channel = response['items'][0]
+            title = channel['snippet']['title']
+            description = channel['snippet']['description']
+            subscriber_count = channel['statistics']['subscriberCount']
+            thumbnail = channel['snippet']['thumbnails']['high']['url'] if 'high' in channel['snippet']['thumbnails'] else None
+            return {
+                'title': title,
+                'description': description,
+                'subscriber_count': subscriber_count,
+                'thumbnail': thumbnail
+            }
+        else:
+            print(f"Channel with ID {youtube_channel_id} not found.")
+            return None
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
+def get_latest_videos(youtube_channel_id, max_results=5):
+    try:
+        youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+
+        request = youtube.search().list(
+            part='snippet',
+            channelId=youtube_channel_id,
+            order='date',
+            type='video',
+            maxResults=max_results
+        )
+        response = request.execute()
+        videos = []
+        for item in response.get('items', []):
+            video_id = item['id']['videoId']
+            title = item['snippet']['title']
+            url = f"http://www.youtube.com/watch?v={video_id}"
+            published_at = item['snippet']['publishedAt']
+            videos.append({'video_id': video_id, 'title': title, 'url': url, 'published_at': published_at})
+
+        return videos
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
 
 async def check_for_new_videos(guild_id):
     config = get_server_config(guild_id)
@@ -186,32 +242,31 @@ async def check_for_new_videos(guild_id):
         return
 
     try:
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            channel_url = f"https://www.youtube.com/channel/{youtube_channel_id}"
-            info = ydl.extract_info(channel_url, download=False)
-
-            if 'entries' not in info or not info['entries']:
-                print(f"No videos found for channel ID: {youtube_channel_id}")
-                return
-
-            video = info['entries'][0]
-            video_id = video['id']
+        latest_videos = get_latest_videos(youtube_channel_id)
+        if latest_videos:
+            new_video = latest_videos[0]  # Get the latest video
+            video_id = new_video.get('video_id')
 
             if video_id != last_video_id:
                 update_last_video_id(guild_id, video_id)
-                title = video.get('title')
-                url = video.get('webpage_url')
-                description = video.get('description')
-                published_at = datetime.fromisoformat(video.get('upload_date')[0:10]).strftime("%Y-%m-%d")
+                title = new_video.get('title')
+                url = new_video.get('url')
+                published_at = new_video.get('published_at')
 
                 channel = client.get_channel(int(discord_channel_id))
                 if channel:
-                    embed = discord.Embed(title=title, description=description, url=url)
+                    embed = discord.Embed(title=title, url=url)  # Description not available in Search API
                     embed.add_field(name="Published", value=published_at, inline=True)
-                    await channel.send(embed=embed)
-                    print(f"New video posted: {title} in server {guild_id}")
+                    try:
+                        await channel.send(embed=embed)
+                        print(f"New video posted: {title} in server {guild_id}")
+                    except discord.errors.HTTPException as e:
+                        logger.error(f"Error sending embed to Discord: {e}")
+
                 else:
                     print(f"Could not find channel with ID: {discord_channel_id} in server {guild_id}")
+        else:
+            print(f"Could not retrieve videos for channel ID: {youtube_channel_id}")
 
     except Exception as e:
         print(f"Error checking for videos in server {guild_id}: {e}")
@@ -286,9 +341,7 @@ async def on_message(message):
             await message.channel.send("You must be an administrator to use this command.")
             return
 
-    if subcommand == "ping":
-        await message.channel.send("Pong!")
-
+    
     elif subcommand == "help":
         await message.channel.send(
             "Available commands:\n"
@@ -386,26 +439,19 @@ async def on_message(message):
             await message.channel.send("Please set both YouTube and Discord channels first.")
 
     elif subcommand == "info":
-        config = get_server_config(message.guild.id)
-        if config and config.get("youtube_channel_id"):
-            try:
-                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                    channel_url = f"https://www.youtube.com/channel/{config['youtube_channel_id']}"
-                    info = ydl.extract_info(channel_url, download=False)
-                    channel_name = info.get('title') or info.get('channel_name')
-                    subscriber_count = info.get('subscriber_count')
-                    description = info.get('description')
-                    thumbnail = info.get('thumbnail')
-
-                    embed = discord.Embed(title=channel_name, description=description)
-                    embed.add_field(name="Subscribers", value=subscriber_count, inline=True)
-                    if thumbnail:
-                        embed.set_thumbnail(url=thumbnail)
+            config = get_server_config(message.guild.id)
+            if config and config.get("youtube_channel_id"):
+                channel_info = get_channel_info(config['youtube_channel_id'])
+                if channel_info:
+                    embed = discord.Embed(title=channel_info['title'], description=channel_info['description'])
+                    embed.add_field(name="Subscribers", value=channel_info['subscriber_count'], inline=True)
+                    if channel_info['thumbnail']:
+                        embed.set_thumbnail(url=channel_info['thumbnail'])
                     await message.channel.send(embed=embed)
-            except Exception as e:
-                await message.channel.send(f"Error fetching channel info: {e}")
-        else:
-            await message.channel.send("Please set the YouTube channel first.")
+                else:
+                    await message.channel.send("Error fetching channel info.")
+            else:
+                await message.channel.send("Please set the YouTube channel first.")
 
     elif subcommand == "remove":
         server_id = message.guild.id
